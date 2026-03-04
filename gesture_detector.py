@@ -45,39 +45,96 @@ class KageBunshinGestureDetector:
             min_tracking_confidence=min_tracking_confidence,
         )
         self._frames_detected = 0
-        self._frames_required = 4
+        self._frames_required = 3
         self._cooldown_frames = 0
         self._cooldown_duration = 25
+        self._last_debug = {
+            "hands": 0,
+            "left_shape": False,
+            "right_shape": False,
+            "cross_ok": False,
+            "orientation_ok": False,
+            "cooldown": 0,
+        }
 
         # Thresholds for cross formation (normalized 0-1 coords)
         self._cross_distance_threshold = 0.2
 
+    @staticmethod
+    def _distance(a, b) -> float:
+        return float(np.hypot(a.x - b.x, a.y - b.y))
+
+    @staticmethod
+    def _joint_angle(a, b, c) -> float:
+        """
+        Angle ABC in degrees using 2D image-space points.
+        """
+        ba = np.array([a.x - b.x, a.y - b.y], dtype=np.float32)
+        bc = np.array([c.x - b.x, c.y - b.y], dtype=np.float32)
+        norm_ba = np.linalg.norm(ba)
+        norm_bc = np.linalg.norm(bc)
+        if norm_ba < 1e-6 or norm_bc < 1e-6:
+            return 0.0
+        cos_theta = float(np.dot(ba, bc) / (norm_ba * norm_bc))
+        cos_theta = float(np.clip(cos_theta, -1.0, 1.0))
+        return float(np.degrees(np.arccos(cos_theta)))
+
     def _fingers_extended(self, landmarks) -> bool:
         """
-        Index (8) and Middle (12) tips must be significantly higher than MCP (5, 9).
-        Higher = smaller y in image coordinates.
+        At least one crossing finger (index or middle) is extended.
+        This is intentionally tolerant because one finger is often partially occluded
+        in real crossed-hand poses.
         """
+        return len(self._extended_tip_indices(landmarks)) >= 1
+
+    def _extended_tip_indices(self, landmarks) -> list:
+        """Return list of extended tip indices among index/middle."""
+        wrist = landmarks[HandLandmark.WRIST]
         index_tip = landmarks[HandLandmark.INDEX_TIP]
+        index_pip = landmarks[HandLandmark.INDEX_PIP]
         index_mcp = landmarks[HandLandmark.INDEX_MCP]
         middle_tip = landmarks[HandLandmark.MIDDLE_TIP]
+        middle_pip = landmarks[HandLandmark.MIDDLE_PIP]
         middle_mcp = landmarks[HandLandmark.MIDDLE_MCP]
 
-        index_raised = index_tip.y < index_mcp.y - 0.02  # tip higher than knuckle
-        middle_raised = middle_tip.y < middle_mcp.y - 0.02
-        return index_raised and middle_raised
+        index_angle = self._joint_angle(index_tip, index_pip, index_mcp)
+        middle_angle = self._joint_angle(middle_tip, middle_pip, middle_mcp)
+
+        index_reach = self._distance(index_tip, wrist) - self._distance(index_mcp, wrist)
+        middle_reach = self._distance(middle_tip, wrist) - self._distance(middle_mcp, wrist)
+
+        # Looser thresholds to support real-world webcam noise + partial occlusion.
+        index_extended = index_angle > 132 and index_reach > 0.018
+        middle_extended = middle_angle > 128 and middle_reach > 0.016
+
+        tips = []
+        if index_extended:
+            tips.append(HandLandmark.INDEX_TIP)
+        if middle_extended:
+            tips.append(HandLandmark.MIDDLE_TIP)
+        return tips
 
     def _fingers_folded(self, landmarks) -> bool:
         """
-        Ring (16) and Pinky (20) tips should be below their knuckles (PIP).
-        Below = larger y (folded toward palm).
+        Orientation-invariant folded check:
+        folded fingers tend to have smaller PIP angles and less reach.
         """
+        wrist = landmarks[HandLandmark.WRIST]
         ring_tip = landmarks[HandLandmark.RING_TIP]
         ring_pip = landmarks[HandLandmark.RING_PIP]
+        ring_mcp = landmarks[HandLandmark.RING_MCP]
         pinky_tip = landmarks[HandLandmark.PINKY_TIP]
         pinky_pip = landmarks[HandLandmark.PINKY_PIP]
+        pinky_mcp = landmarks[HandLandmark.PINKY_MCP]
 
-        ring_folded = ring_tip.y > ring_pip.y - 0.02
-        pinky_folded = pinky_tip.y > pinky_pip.y - 0.02
+        ring_angle = self._joint_angle(ring_tip, ring_pip, ring_mcp)
+        pinky_angle = self._joint_angle(pinky_tip, pinky_pip, pinky_mcp)
+
+        ring_reach = self._distance(ring_tip, wrist) - self._distance(ring_mcp, wrist)
+        pinky_reach = self._distance(pinky_tip, wrist) - self._distance(pinky_mcp, wrist)
+
+        ring_folded = ring_angle < 145 or ring_reach < 0.015
+        pinky_folded = pinky_angle < 145 or pinky_reach < 0.015
         return ring_folded and pinky_folded
 
     def _hand_orientation_vertical(self, landmarks) -> bool:
@@ -91,7 +148,7 @@ class KageBunshinGestureDetector:
         dy = abs(index_tip.y - wrist.y)
         if dy < 0.02:
             return False
-        return dx / dy < 0.6  # More vertical than horizontal
+        return dx / dy < 0.9  # Allow slight diagonal tilt
 
     def _hand_orientation_horizontal(self, landmarks) -> bool:
         """
@@ -104,7 +161,7 @@ class KageBunshinGestureDetector:
         dy = abs(index_tip.y - wrist.y)
         if dx < 0.02:
             return False
-        return dy / dx < 0.6  # More horizontal than vertical
+        return dy / dx < 0.9  # Allow slight diagonal tilt
 
     def _hand_has_jutsu_shape(self, landmarks) -> bool:
         """Index+middle extended, ring+pinky folded."""
@@ -115,29 +172,22 @@ class KageBunshinGestureDetector:
         Left hand's extended fingers within distance of right hand's extended fingers.
         Forms the characteristic "+" cross.
         """
-        left_index = left_landmarks[HandLandmark.INDEX_TIP]
-        left_middle = left_landmarks[HandLandmark.MIDDLE_TIP]
-        right_index = right_landmarks[HandLandmark.INDEX_TIP]
-        right_middle = right_landmarks[HandLandmark.MIDDLE_TIP]
+        left_tips = self._extended_tip_indices(left_landmarks)
+        right_tips = self._extended_tip_indices(right_landmarks)
 
-        # Check distance between left fingers and right fingers
-        d_left_idx_right_idx = np.sqrt(
-            (left_index.x - right_index.x) ** 2 + (left_index.y - right_index.y) ** 2
-        )
-        d_left_idx_right_mid = np.sqrt(
-            (left_index.x - right_middle.x) ** 2 + (left_index.y - right_middle.y) ** 2
-        )
-        d_left_mid_right_idx = np.sqrt(
-            (left_middle.x - right_index.x) ** 2 + (left_middle.y - right_index.y) ** 2
-        )
-        d_left_mid_right_mid = np.sqrt(
-            (left_middle.x - right_middle.x) ** 2 + (left_middle.y - right_middle.y) ** 2
-        )
+        # Fallback: use both tips when extension classification is uncertain.
+        if not left_tips:
+            left_tips = [HandLandmark.INDEX_TIP, HandLandmark.MIDDLE_TIP]
+        if not right_tips:
+            right_tips = [HandLandmark.INDEX_TIP, HandLandmark.MIDDLE_TIP]
 
-        min_dist = min(
-            d_left_idx_right_idx, d_left_idx_right_mid,
-            d_left_mid_right_idx, d_left_mid_right_mid
-        )
+        min_dist = float("inf")
+        for lt in left_tips:
+            for rt in right_tips:
+                d = self._distance(left_landmarks[lt], right_landmarks[rt])
+                if d < min_dist:
+                    min_dist = d
+
         return min_dist < self._cross_distance_threshold
 
     def _get_handedness(self, results) -> list:
@@ -156,11 +206,24 @@ class KageBunshinGestureDetector:
         """
         if self._cooldown_frames > 0:
             self._cooldown_frames -= 1
+            self._last_debug.update({"cooldown": self._cooldown_frames})
             return False
 
         results = self.hands.process(frame_rgb)
 
-        if not results.multi_hand_landmarks or len(results.multi_hand_landmarks) != 2:
+        detected_hands = len(results.multi_hand_landmarks) if results.multi_hand_landmarks else 0
+        self._last_debug.update(
+            {
+                "hands": detected_hands,
+                "left_shape": False,
+                "right_shape": False,
+                "cross_ok": False,
+                "orientation_ok": False,
+                "cooldown": 0,
+            }
+        )
+
+        if not results.multi_hand_landmarks or detected_hands != 2:
             self._frames_detected = 0
             return False
 
@@ -188,6 +251,7 @@ class KageBunshinGestureDetector:
             ]
 
         is_jutsu = False
+        best_candidate = None
         for left_lm, right_lm in orderings:
             left_shape = self._hand_has_jutsu_shape(left_lm)
             right_shape = self._hand_has_jutsu_shape(right_lm)
@@ -195,11 +259,33 @@ class KageBunshinGestureDetector:
             right_vertical = self._hand_orientation_vertical(right_lm)
             cross_ok = self._cross_formed(left_lm, right_lm)
 
-            # Shape + cross + orientation (prefer both; accept if at least one correct)
-            orientation_ok = left_horizontal and right_vertical or left_horizontal or right_vertical
+            # Shape + cross + orientation.
+            # Accept canonical pair; otherwise allow if at least one hand has expected axis.
+            orientation_ok = (left_horizontal and right_vertical) or (
+                self._hand_orientation_vertical(left_lm) and self._hand_orientation_horizontal(right_lm)
+            ) or left_horizontal or right_vertical
+
+            candidate = {
+                "left_shape": left_shape,
+                "right_shape": right_shape,
+                "cross_ok": cross_ok,
+                "orientation_ok": orientation_ok,
+            }
+            if best_candidate is None:
+                best_candidate = candidate
+            else:
+                prev_score = int(best_candidate["left_shape"]) + int(best_candidate["right_shape"]) + int(best_candidate["cross_ok"]) + int(best_candidate["orientation_ok"])
+                cand_score = int(left_shape) + int(right_shape) + int(cross_ok) + int(orientation_ok)
+                if cand_score > prev_score:
+                    best_candidate = candidate
+
             if left_shape and right_shape and cross_ok and orientation_ok:
                 is_jutsu = True
+                best_candidate = candidate
                 break
+
+        if best_candidate:
+            self._last_debug.update(best_candidate)
 
         if is_jutsu:
             self._frames_detected += 1
@@ -215,6 +301,10 @@ class KageBunshinGestureDetector:
     def get_hand_landmarks(self, frame_rgb):
         """Get raw hand landmarks for drawing."""
         return self.hands.process(frame_rgb)
+
+    def get_debug_status(self) -> dict:
+        """Return last frame detector status for on-screen troubleshooting."""
+        return dict(self._last_debug)
 
     def close(self):
         self.hands.close()

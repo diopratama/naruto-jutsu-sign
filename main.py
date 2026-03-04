@@ -83,6 +83,35 @@ def draw_hand_landmarks(frame, results):
     return frame
 
 
+def draw_debug_status(frame: np.ndarray, detector: KageBunshinGestureDetector) -> np.ndarray:
+    """Show detector booleans on screen for quick tuning/troubleshooting."""
+    dbg = detector.get_debug_status()
+    lines = [
+        f"Hands: {dbg.get('hands', 0)}/2",
+        f"Left shape: {dbg.get('left_shape', False)}",
+        f"Right shape: {dbg.get('right_shape', False)}",
+        f"Cross: {dbg.get('cross_ok', False)}",
+        f"Orientation: {dbg.get('orientation_ok', False)}",
+    ]
+
+    if dbg.get("cooldown", 0) > 0:
+        lines.append(f"Cooldown: {dbg['cooldown']}")
+
+    y = 105
+    for line in lines:
+        cv2.putText(
+            frame,
+            line,
+            (30, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (150, 255, 150),
+            1,
+        )
+        y += 20
+    return frame
+
+
 def main():
     print("=" * 50)
     print("  Kage Bunshin no Jutsu - Shadow Clone Detection")
@@ -176,6 +205,7 @@ def main():
                     (200, 200, 200),
                     1,
                 )
+                display_frame = draw_debug_status(display_frame, detector)
 
             cv2.imshow("Kage Bunshin no Jutsu", display_frame)
 

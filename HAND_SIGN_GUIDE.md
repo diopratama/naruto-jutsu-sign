@@ -4,6 +4,72 @@ How to position your hands so the clone effect triggers.
 
 ---
 
+## Hand Shape Illustration
+
+### Single Hand (Front View — Palm Facing Camera)
+
+```
+                    ╭───╮
+                    │   │  ← Index finger (EXTENDED up)
+                    ╰───╯
+                    ╭───╮
+                    │   │  ← Middle finger (EXTENDED up)
+                    ╰───╯
+    ╭───╮       ╭───┴───╮
+    │   │       │       │  ← Ring & pinky (FOLDED)
+    ╰───╯       ╰───────╯
+     ↑
+   Thumb (relaxed to side)
+```
+
+### Single Hand (Side View)
+
+```
+    Index  ─────┐
+    Middle ─────┤  ↑ Both straight forward
+                │
+    Ring   ══●══╯  ← Folded into palm
+    Pinky    ●
+```
+
+### Cross Formation — Both Hands Together (Front View)
+
+```
+                    │
+                    │  RIGHT hand
+                    │  (fingers UP)
+                    │
+              ╭─────┼─────╮
+              │     │     │
+              │  ───●───  │  ← Cross point
+              │     │     │     (fingers meet here)
+              ╰─────┼─────╯
+                    │
+    ════════════════╪════════════════
+                    │
+         LEFT hand (fingers SIDEWAYS)
+```
+
+### Position Diagram (Top View)
+
+```
+                    CAMERA
+                       │
+                       ▼
+              ┌───────────────┐
+              │               │
+              │    ┌───┐      │
+              │    │ ↑ │      │  Right hand: fingers up
+              │    │ ↑ │      │
+              │ ───┼─●─┼───   │  ● = where fingers cross
+              │    │   │      │
+              │    └───┘      │  Left hand: fingers sideways (→)
+              │               │
+              └───────────────┘
+```
+
+---
+
 ## Overview
 
 You need **BOTH hands** in frame, forming a **cross (+) shape**:
